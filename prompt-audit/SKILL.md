@@ -94,7 +94,7 @@ No action needed.
 **WEAK POINTER**
 The bullet references a file but lacks a trigger. Claude cannot tell when to read it.
 The description alone does not tell Claude when the file is relevant.
-Example: `[Philips CPQ Project](project_philips_cpq.md) - Contract pricing POC for Philips...`
+Example: `[API Migration](project_api_migration.md) - Backend rewrite from Python to Node.js...`
 Action: Add "READ before/when [trigger]" prefix.
 
 **STALE**
@@ -119,7 +119,7 @@ File: ~/.claude/projects/<project>/memory/MEMORY.md
 |-------------------------------|--------|---------------|
 | No em dashes -- Never use...  | SELF-CONTAINED | -- |
 | [GTM Pipeline](gtm-pipeline.md) -- READ before... | GOOD POINTER | -- |
-| [Philips CPQ Project](proj...) -- Contract pricing POC | WEAK POINTER | Add: "READ before discussing Philips, CPQ, or contract pricing POC" |
+| [API Migration](proj...) -- Backend rewrite from Python to Node.js | WEAK POINTER | Add: "READ before working on API migration or backend architecture" |
 | [East Coast trip -- pending hotel bookings] (2025-12-01) | STALE | Review or archive -- status word "pending" with date >30 days old |
 ```
 
