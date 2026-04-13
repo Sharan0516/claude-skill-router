@@ -1,213 +1,198 @@
 # claude-token-optimizer
 
-Reduce Claude Code's system prompt overhead by loading skills on-demand instead of all at once, and compact memory indexes to prevent bulk loading of memory files.
+Audit and reduce Claude Code's system prompt token overhead. Optimizes skills, memory files, and gives you visibility into everything consuming your context window.
 
 ## The Problem
 
-Claude Code loads a description of every skill in `~/.claude/skills/` into the system prompt at the start of each conversation. Each skill adds ~30-50 tokens of description. That's small individually, but it adds up alongside everything else in the system prompt: CLAUDE.md instructions, memory entries, MCP plugin registrations, deferred tool lists, and context store snapshots.
+The more you build on top of Claude Code, the more tokens load into the system prompt on every conversation. Skills, CLAUDE.md instructions, memory files, MCP plugin registrations, deferred tool lists -- all of it gets packed in before you type a single character.
 
-With a heavily customized setup (20+ skills, detailed CLAUDE.md, memory files, multiple MCP servers), the combined system prompt can reach 10,000-15,000+ tokens before you type a single character. The more you build on top of Claude Code, the more you load into every conversation, and at some point the model starts competing with its own instructions.
+With a heavily customized setup (20+ skills, detailed CLAUDE.md, dozens of memory files, multiple MCP servers), the system prompt can reach 15,000-45,000+ tokens. At some point, the model starts competing with its own instructions: dropping rules, hallucinating details, producing less precise output.
 
-The result: instruction-dropping, less precise output, and the feeling that Claude got worse when really you just gave it too much to hold in its head at once.
+It's not the model getting worse. It's what you're loading into it.
 
-**Before (35 skills registered):**
+**Real results from a 35-skill, 76-memory-file setup:**
+
 ```
-Skill descriptions in system prompt: ~1,500 tokens
-Total system prompt (skills + CLAUDE.md + memory + plugins): ~10,000-15,000 tokens
-Every skill loaded: yes, even the 34 you don't need right now
+BEFORE                                    AFTER
+Skills:   ~1,500 tokens (35 loaded)       Skills:   ~200 tokens (1 router catalog)
+Memory:  ~42,000 tokens (76 files)        Memory:  ~900 tokens (6 compact indexes)
+CLAUDE.md: ~2,200 tokens                  CLAUDE.md: ~2,200 tokens (unchanged)
+─────────────────────────────             ─────────────────────────────
+Total:   ~46,000 tokens                   Total:   ~3,300 tokens
+
+                                          81% reduction. Same capabilities.
 ```
 
-**After (skill-router pattern):**
+## What's Inside
+
+This repo gives you three tools that work independently or together:
+
+| Tool | What it does | Command |
+|---|---|---|
+| **Audit** | Scan your full system prompt overhead with a breakdown by source | `python3 audit.py` |
+| **Skill Router** | Move skills to a vault, load on-demand via a lightweight catalog | `./migrate.sh` |
+| **Memory Router** | Compact MEMORY.md indexes to prevent bulk file loading | `./memory-router.sh` |
+
+Start with the audit to see where your tokens are going. Then apply whichever optimizations make sense.
+
+## Quick Start
+
+```bash
+git clone https://github.com/sharan0516/claude-token-optimizer.git
+cd claude-token-optimizer
+
+# 1. See where your tokens are going
+python3 audit.py
+
+# 2. Optimize skills (moves to vault, installs router)
+./migrate.sh
+
+# 3. Optimize memory (compacts MEMORY.md indexes)
+./memory-router.sh
+
+# 4. See the improvement
+python3 audit.py
 ```
-Skill descriptions in system prompt: ~200 tokens (router catalog only)
-Total system prompt: reduced by ~1,300 tokens
-Skills available: all of them, loaded on-demand
+
+Restart Claude Code after running the optimizers. Changes take effect on the next session.
+
+## Audit
+
+The audit script scans five sources of system prompt overhead and produces a colored terminal report:
+
+```bash
+python3 audit.py            # terminal report
+python3 audit.py --json     # machine-readable JSON
+python3 audit.py --path .   # check project-level CLAUDE.md from specific directory
 ```
 
-The skill router is one piece of a larger principle: **load on-demand, not upfront.** The same approach can be applied to CLAUDE.md sections, memory files, and other sources of prompt overhead.
+It shows:
+- Token breakdown by category (skills, CLAUDE.md, memory, MCP servers, context store)
+- Verdict: Healthy / Moderate / Heavy / Critical
+- Savings summary if optimizations are already applied (before vs. after)
+- Potential savings if optimizations are not yet applied
+- Prioritized recommendations
 
-> Note: This only affects skills you install in `~/.claude/skills/`. Extension skills like `document-skills:*`, `example-skills:*`, and other namespace-prefixed skills are controlled by their respective extensions and are not affected.
+The audit detects whether the skill-router and memory-router are active and adjusts its calculations accordingly.
 
-## How It Works
+## Skill Router
 
-Three steps on every turn:
+Claude Code loads a description of every skill in `~/.claude/skills/` into the system prompt. The skill router replaces all those descriptions with one lightweight catalog (~200 tokens). Skills move to `~/.claude/skill-vault/` and load on-demand only when your intent matches a trigger.
 
-1. **You talk** - Claude reads your message normally
-2. **Router matches** - one lightweight skill scans a compact catalog table to see if your intent matches any skill trigger
-3. **Skill loads** - if matched, the full skill SKILL.md is read from `~/.claude/skill-vault/` and executed; if not, Claude proceeds normally
+```bash
+./migrate.sh      # move skills to vault, install router
+./restore.sh      # undo everything, move skills back
+./add-skill.sh ~/.claude/skills/my-new-skill   # add a new skill to the vault
+```
 
-The catalog is a simple markdown table stored inside the router's `SKILL.md`:
+### How the router works
+
+1. **You talk** -- Claude reads your message normally
+2. **Router matches** -- one small skill scans a catalog table for trigger keywords
+3. **Skill loads** -- if matched, the full SKILL.md is read from the vault and executed. If no match, Claude proceeds normally.
+
+The catalog is a markdown table inside the router's SKILL.md:
 
 ```
 | Skill         | Triggers                                    | Vault Path                          |
 |---------------|---------------------------------------------|-------------------------------------|
 | meeting-prep  | prep for meeting, meeting briefing          | ~/.claude/skill-vault/meeting-prep/ |
 | legal         | review contract, legal review, draft NDA    | ~/.claude/skill-vault/legal/        |
-| brainstorm    | brainstorm, pressure-test, challenge this   | ~/.claude/skill-vault/brainstorm/   |
 ```
 
-Match is generous - "get me ready for my call with Acme" triggers `meeting-prep` even without exact keyword match. For compound tasks, skills load sequentially.
+Match is generous -- "get me ready for my call with Acme" triggers `meeting-prep` without exact keyword match.
 
-## Why This Matters
-
-Claude Code's context window is shared between:
-- The system prompt (skills, CLAUDE.md, memory, plugins, tool registrations)
-- The conversation history
-- Your actual task content
-
-Every token in the system prompt is a token the model processes on every turn. Skills are just one contributor, but they're the easiest to optimize because the pattern is straightforward: keep a lightweight index, load the full content only when needed.
-
-This is the same principle behind lazy loading in software, database indexes, or any system where you separate the catalog from the content. You don't load every book in the library to find the one you need. You check the index first.
-
-## Installation
-
-```bash
-git clone https://github.com/sharan0516/claude-token-optimizer.git
-cd claude-token-optimizer
-./migrate.sh
-```
-
-That is it. The script:
-- Scans `~/.claude/skills/` for all installed skills
-- Moves them to `~/.claude/skill-vault/`
-- Generates a catalog table from the skills it found
-- Installs the router's `SKILL.md` into `~/.claude/skills/skill-router/`
-
-Restart Claude Code after running - the new system prompt takes effect on the next session.
-
-## Uninstall
-
-```bash
-./restore.sh
-```
-
-Moves everything back from `~/.claude/skill-vault/` to `~/.claude/skills/` and removes the router.
+> Note: This only affects skills you install in `~/.claude/skills/`. Extension skills like `document-skills:*`, `example-skills:*`, and other namespace-prefixed skills are controlled by their respective extensions.
 
 ## Memory Router
 
-Memory files are a bigger source of system prompt overhead than skills. In a typical heavily-customized setup, the memory system can account for over 90% of system prompt overhead -- skills are only one piece.
+Memory files are typically the biggest source of system prompt overhead. Claude Code loads `MEMORY.md` and follows every markdown link in it, pulling each referenced `.md` file into the system prompt. With many projects and memory files, this can be 30,000-40,000+ tokens.
 
-Claude Code loads `MEMORY.md` and follows every markdown link in it, pulling each referenced `.md` file into the system prompt. With 6 project directories and 76 memory files totaling ~42,000 tokens, that is the dominant cost.
+The memory router compacts each `MEMORY.md` by removing markdown links. Without links, Claude Code loads only the compact index -- not the individual files. Memory files stay on disk and are read on-demand when relevant.
 
-The memory router compacts each `MEMORY.md` by removing markdown links. Without links, Claude Code loads only the index -- not the files. The actual memory files stay on disk and are read on-demand when relevant to the current task.
+```bash
+./memory-router.sh      # compact all MEMORY.md files
+./memory-restore.sh     # restore from backups
+```
 
-### How it works
+### Before and after
 
 **Before (linked format -- triggers auto-loading):**
 ```
 ## Active Projects
-- [Philips CPQ Project](project_philips_cpq.md) - Contract pricing POC for Philips, $75K/12-week MVP
-- [East & West Coast Trip](project_east_west_coast_trip.md) - 19-contact trip plan: Bay Area, Boston, NYC
+- [Philips CPQ Project](project_philips_cpq.md) - Contract pricing POC, $75K/12-week MVP
+- [East Coast Trip](project_east_coast_trip.md) - 19-contact trip plan
 ```
 
 **After (compact catalog -- no auto-loading):**
 ```
 ## Active Projects
-- Philips CPQ Project -- Contract pricing POC for Philips, $75K/12-week MVP [project]
-- East & West Coast Trip -- 19-contact trip plan: Bay Area, Boston, NYC [project]
+- Philips CPQ Project -- Contract pricing POC, $75K/12-week MVP [project]
+- East Coast Trip -- 19-contact trip plan [project]
 ```
 
-Each entry keeps the title and inline description. The `[type]` tag is read from the file's frontmatter. No information is lost -- it is just not linked, so Claude Code does not follow the reference automatically.
+Each entry keeps the title and description. The `[type]` tag comes from the file's frontmatter. No information is lost -- it's just not linked, so Claude Code doesn't follow the reference automatically.
 
-### Usage
+### Writing good one-liners
 
-```bash
-# Compact all MEMORY.md files across all project directories
-./memory-router.sh
+After compacting, the quality of your one-line descriptions matters. Two patterns:
 
-# Restore originals from backups
-./memory-restore.sh
+**Self-contained** (the one-liner IS the instruction):
+```
+- No em dashes -- Never use em dashes in outreach or emails. Signals LLM text. [feedback]
 ```
 
-The script:
-- Finds all `~/.claude/projects/*/memory/MEMORY.md` files
-- Backs each one up to `MEMORY.md.backup`
-- Reads frontmatter from linked files to extract type tags
-- Writes a compacted version with no markdown links
-- Is idempotent: safe to run again, skips already-compacted files
-
-Restart Claude Code after running to apply changes.
-
-## Adding New Skills
-
-When you install a new skill that should be vaulted:
-
-```bash
-./add-skill.sh ~/.claude/skills/my-new-skill
+**Pointer with trigger** (tells Claude when to read the full file):
+```
+- Gmail automation -- READ before any Playwright Gmail compose operation [reference]
 ```
 
-This moves the skill to the vault and appends a new row to the router's catalog. If you need to customize the trigger keywords, edit `~/.claude/skills/skill-router/SKILL.md` directly after running the script.
-
-To add a skill manually, just append a row to the catalog table in `~/.claude/skills/skill-router/SKILL.md`:
-
-```markdown
-| my-skill | trigger phrase one, trigger phrase two | ~/.claude/skill-vault/my-skill/ |
-```
+Weak one-liners like "Voice profile -- posting preferences [user]" won't trigger Claude to read the file when it should. Add a "READ before/when [specific action]" prefix for reference-type entries.
 
 ## Prompt Audit Skill
 
-The repo includes a built-in audit skill that combines token analysis with memory quality checking. If you use the skill-router, it is automatically available via natural language:
-
-- "audit my system prompt"
-- "why is Claude slow"
-- "check memory quality"
-
-The audit runs three phases:
-
-1. **Token Audit** -- scans skills, CLAUDE.md, memory files, MCP servers, and context store. Shows a breakdown with a Healthy/Moderate/Heavy/Critical verdict.
-2. **Memory Quality Audit** -- classifies every MEMORY.md entry as SELF-CONTAINED, GOOD POINTER, WEAK POINTER, STALE, or CONFLICTING. Suggests fixes for weak entries.
-3. **Recommendations** -- prioritized list of optimizations with estimated impact. Asks before applying any changes.
-
-To install the audit skill into your vault:
+The repo includes a Claude Code skill for interactive auditing. If you use the skill-router, add it to your vault:
 
 ```bash
 cp -r prompt-audit ~/.claude/skill-vault/prompt-audit
 ```
 
-Then add this row to your skill-router catalog:
-
-```markdown
-| prompt-audit | audit system prompt, prompt audit, why is claude slow, audit memory, memory quality | ~/.claude/skill-vault/prompt-audit/ |
+Then add to your router catalog:
+```
+| prompt-audit | audit system prompt, prompt audit, why is claude slow, memory quality | ~/.claude/skill-vault/prompt-audit/ |
 ```
 
-The audit can also be run standalone without the skill-router:
+Triggers: "audit my system prompt", "why is Claude slow", "check memory quality"
 
-```bash
-python3 audit.py
-python3 audit.py --json
-python3 audit.py --path /path/to/project
-```
+The skill runs three phases: token audit, memory quality classification (self-contained / good pointer / weak pointer / stale / conflicting), and prioritized recommendations.
 
 ## The Bigger Picture
 
-The skill router tackles one source of prompt overhead. If you're experiencing degraded performance with a heavily customized Claude Code setup, audit everything that loads into the system prompt:
-
-| Source | What loads | Can you optimize it? |
+| Source | What loads | Optimization |
 |---|---|---|
-| Skills (`~/.claude/skills/`) | Description of every skill | Yes -- `migrate.sh` (this repo) |
-| Memory files | All files linked from MEMORY.md | Yes -- `memory-router.sh` (this repo) |
-| CLAUDE.md | All instructions, every turn | Split into project-level files |
-| MCP plugins | Tool registrations for every connected server | Disconnect unused servers |
+| Skills | Description of every installed skill | `migrate.sh` -- skill router |
+| Memory files | All files linked from MEMORY.md | `memory-router.sh` -- compact indexes |
+| CLAUDE.md | Full file, every turn | Split into project-level files |
+| MCP plugins | Tool registrations for every server | Disconnect unused servers |
 | Deferred tools | Name listing of all deferred tools | Managed by extensions |
 
-The principle is the same everywhere: keep the always-loaded footprint small, pull details on demand.
+The principle is the same everywhere: **keep the always-loaded footprint small, pull details on demand.**
 
 ## Repository Structure
 
 ```
 claude-token-optimizer/
-  README.md               This file
-  skill-router/
-    SKILL.md              Template router - copy to ~/.claude/skills/skill-router/
-  prompt-audit/
-    SKILL.md              Audit skill for token analysis + memory quality
-    audit.py              Standalone audit script (also used by the skill)
-  migrate.sh              Move skills to vault, install router
-  restore.sh              Move skills back, remove router
-  add-skill.sh            Add a single new skill to the vault
-  memory-router.sh        Compact MEMORY.md files to prevent bulk loading
+  audit.py                Audit script -- scan system prompt token usage
+  migrate.sh              Move skills to vault, install skill-router
+  restore.sh              Move skills back, remove skill-router
+  add-skill.sh            Add a single skill to the vault
+  memory-router.sh        Compact MEMORY.md files
   memory-restore.sh       Restore MEMORY.md files from backups
-  audit.py                Standalone audit script (same as prompt-audit/audit.py)
+  skill-router/
+    SKILL.md              Template router skill
+  prompt-audit/
+    SKILL.md              Audit skill (for use via skill-router)
+    audit.py              Audit script (copy, also at repo root)
   LICENSE
 ```
 
