@@ -236,9 +236,21 @@ def find_memory_dir():
     return dirs
 
 
+MEMORY_ROUTER_MARKER = "MEMORY ROUTER:"
+
+
+def is_memory_compacted(index_content):
+    """Check if MEMORY.md has been compacted by memory-router.sh."""
+    return MEMORY_ROUTER_MARKER in index_content
+
+
 def audit_memory():
-    results = []
+    results = []          # what actually loads into system prompt now
+    all_file_items = []   # all .md files in all memory dirs (for potential calc)
     memory_dirs = find_memory_dir()
+    router_applied = False
+    index_only_total = 0  # tokens from just MEMORY.md indexes
+    all_files_total = 0   # tokens from indexes + all individual .md files
 
     for mem_dir in memory_dirs:
         index_file = mem_dir / "MEMORY.md"
@@ -247,32 +259,56 @@ def audit_memory():
 
         index_toks, index_content = file_tokens(index_file)
         label = str(index_file).replace(str(Path.home()), "~")
-        results.append({
+        dir_compacted = is_memory_compacted(index_content)
+        if dir_compacted:
+            router_applied = True
+
+        index_item = {
             "path": str(index_file),
             "label": label,
             "tokens": index_toks,
             "type": "index",
-        })
+        }
+        index_only_total += index_toks
+        all_files_total += index_toks
 
-        # Find referenced .md files in the same directory
+        # Collect all individual .md files in this memory dir
+        dir_file_items = []
         for f in sorted(mem_dir.iterdir()):
-            if f.name == "MEMORY.md" or not f.name.endswith(".md") or f.name.startswith("_"):
+            if f.name == "MEMORY.md" or f.name.endswith(".backup") or not f.name.endswith(".md") or f.name.startswith("_"):
                 continue
             toks, _ = file_tokens(f)
             flabel = str(f).replace(str(Path.home()), "~")
-            results.append({
+            item = {
                 "path": str(f),
                 "label": flabel,
                 "tokens": toks,
                 "type": "memory-file",
-            })
+            }
+            dir_file_items.append(item)
+            all_files_total += toks
 
-    subtotal = sum(r["tokens"] for r in results)
+        all_file_items.extend(dir_file_items)
+
+        if dir_compacted:
+            # Memory-router applied: only the compact index loads
+            results.append(index_item)
+        else:
+            # No router: index + all files load
+            results.append(index_item)
+            results.extend(dir_file_items)
+
+    loaded_subtotal = sum(r["tokens"] for r in results)
+
     return {
         "items": results,
-        "subtotal": subtotal,
+        "subtotal": loaded_subtotal,
         "count": len(results),
-        "note": "estimate - memory loading behavior varies by session context",
+        "note": "compact index only (memory-router applied)" if router_applied else "estimate - all linked files loaded",
+        "router_applied": router_applied,
+        "index_only_total": index_only_total,
+        "all_files_total": all_files_total,
+        "all_file_count": len(all_file_items) + len(memory_dirs),  # files + indexes
     }
 
 
@@ -522,7 +558,8 @@ def print_terminal_report(data):
     # --- MEMORY ---
     section_label = colorize("MEMORY FILES", Colors.BOLD + Colors.WHITE)
     section_pct   = f"{pct(memory['subtotal'], total):.0f}%"
-    print(f"  {section_label}  {colorize(section_pct, Colors.DIM)}")
+    router_badge  = colorize(" [memory-router active]", Colors.GREEN) if memory.get("router_applied") else ""
+    print(f"  {section_label}  {colorize(section_pct, Colors.DIM)}{router_badge}")
     print(colorize(f"  Note: {memory['note']}", Colors.DIM))
     print(divider)
     # Show first 12 items, then summarize
@@ -538,7 +575,8 @@ def print_terminal_report(data):
         print(f"    {colorize(f'... {hidden} more files', Colors.DIM)}{colorize(fmt_tokens(hidden_tokens).rjust(10), Colors.DIM)}")
     print(divider)
     sub_color = token_color(memory["subtotal"])
-    print(f"  Subtotal: {colorize(fmt_tokens(memory['subtotal']), sub_color + Colors.BOLD)} tokens  ({memory['count']} files, estimate)")
+    load_label = "compact indexes only" if memory.get("router_applied") else "files, estimate"
+    print(f"  Subtotal: {colorize(fmt_tokens(memory['subtotal']), sub_color + Colors.BOLD)} tokens  ({memory['count']} {load_label})")
     print()
 
     # --- MCP SERVERS ---
@@ -620,6 +658,77 @@ def print_terminal_report(data):
               f"  {colorize('(on-demand, not in total)', Colors.DIM)}")
     print()
 
+    # --- SAVINGS SUMMARY ---
+    has_any_optimization = has_router or memory.get("router_applied", False)
+    if has_any_optimization:
+        print(colorize("  SAVINGS SUMMARY", Colors.BOLD + Colors.GREEN))
+        print(divider)
+
+        # Skill savings
+        if has_router and skills.get("vault_skill_count", 0) > 0:
+            vault_count = skills["vault_skill_count"]
+            without_router = vault_count * 40  # ~40 tokens per skill description
+            with_router = skills["subtotal"]
+            skill_saved = max(0, without_router - with_router + without_router)
+            # More accurate: without router = current catalog tokens + vault skills as descriptions
+            # Actually: without router, all vault skills would be in skills/ adding ~40 tok each
+            est_without = skills["subtotal"] + (vault_count * 40)
+            est_with = skills["subtotal"]
+            skill_saved = est_without - est_with
+            print(f"    {colorize('Skills:', Colors.WHITE)}  "
+                  f"{colorize(fmt_tokens(est_without), Colors.RED)} without router -> "
+                  f"{colorize(fmt_tokens(est_with), Colors.GREEN)} with router  "
+                  f"{colorize('(saved ' + fmt_tokens(skill_saved) + ')', Colors.GREEN + Colors.BOLD)}")
+
+        # Memory savings
+        if memory.get("router_applied"):
+            mem_without = memory["all_files_total"]
+            mem_with = memory["index_only_total"]
+            mem_saved = mem_without - mem_with
+            print(f"    {colorize('Memory:', Colors.WHITE)} "
+                  f"{colorize(fmt_tokens(mem_without), Colors.RED)} without router -> "
+                  f"{colorize(fmt_tokens(mem_with), Colors.GREEN)} with router  "
+                  f"{colorize('(saved ' + fmt_tokens(mem_saved) + ')', Colors.GREEN + Colors.BOLD)}")
+
+        # Total savings
+        total_without = total
+        if has_router and skills.get("vault_skill_count", 0) > 0:
+            total_without += skills["vault_skill_count"] * 40
+        if memory.get("router_applied"):
+            total_without += (memory["all_files_total"] - memory["index_only_total"])
+
+        total_saved = total_without - total
+        pct_saved = pct(total_saved, total_without) if total_without > 0 else 0
+
+        print()
+        print(f"    {colorize('Total:', Colors.BOLD + Colors.WHITE)}  "
+              f"{colorize(fmt_tokens(total_without), Colors.RED)} before -> "
+              f"{colorize(fmt_tokens(total), Colors.GREEN)} after  "
+              f"{colorize('(saved ' + fmt_tokens(total_saved) + f', {pct_saved:.0f}% reduction)', Colors.GREEN + Colors.BOLD)}")
+        print()
+    else:
+        # No optimizations detected -- show potential savings
+        potential_skill_save = 0
+        potential_mem_save = 0
+        if not has_router and skills["count"] > 3:
+            potential_skill_save = max(0, skills["subtotal"] - 200)  # router catalog ~200 tokens
+        if not memory.get("router_applied") and memory["subtotal"] > 1000:
+            potential_mem_save = max(0, memory["subtotal"] - memory.get("index_only_total", 500))
+        potential_total = potential_skill_save + potential_mem_save
+        if potential_total > 500:
+            print(colorize("  POTENTIAL SAVINGS", Colors.BOLD + Colors.YELLOW))
+            print(divider)
+            if potential_skill_save > 0:
+                print(f"    {colorize('Skill router:', Colors.WHITE)} could save {colorize(fmt_tokens(potential_skill_save), Colors.YELLOW)} tokens "
+                      f"({skills['count']} skills -> 1 router catalog)")
+            if potential_mem_save > 0:
+                print(f"    {colorize('Memory router:', Colors.WHITE)} could save {colorize(fmt_tokens(potential_mem_save), Colors.YELLOW)} tokens "
+                      f"({memory['count']} files -> compact indexes)")
+            print(f"    {colorize('Total potential:', Colors.BOLD + Colors.WHITE)} "
+                  f"{colorize(fmt_tokens(potential_total), Colors.YELLOW + Colors.BOLD)} tokens "
+                  f"({colorize(f'{pct(potential_total, total):.0f}% of current overhead', Colors.YELLOW)})")
+            print()
+
     # --- RECOMMENDATIONS ---
     recs = build_recommendations(data)
     if recs:
@@ -659,11 +768,20 @@ def build_recommendations(data):
                 "Consider moving project-specific rules into project-level CLAUDE.md files "
                 "to reduce per-session load."
             )
-        elif label == "Memory files" and cat["count"] > 10:
-            recs.append(
-                f"{cat['count']} memory files loaded ({toks:,} tokens, {p:.0f}% of total). "
-                "Prune stale feedback and project files to reduce context overhead."
-            )
+        elif label == "Memory files":
+            if memory.get("router_applied"):
+                if toks > 2000:
+                    recs.append(
+                        f"Memory-router active. Compact indexes use {toks:,} tokens ({p:.0f}%). "
+                        f"Without the router, all {memory.get('all_file_count', '?')} files would load "
+                        f"({memory.get('all_files_total', 0):,} tokens). "
+                        "Consider pruning stale memory files to shrink further."
+                    )
+            elif cat["count"] > 10:
+                recs.append(
+                    f"{cat['count']} memory files loaded ({toks:,} tokens, {p:.0f}% of total). "
+                    "Run memory-router.sh to compact MEMORY.md indexes and prevent bulk loading."
+                )
         elif label == "MCP servers" and cat["count"] > 0:
             recs.append(
                 f"{cat['count']} MCP server(s) with {cat['total_tools']} total tools "
