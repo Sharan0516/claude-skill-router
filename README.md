@@ -45,6 +45,15 @@ cd claude-token-optimizer
 
 One command. It runs the full pipeline: baseline audit, skill router migration, memory compaction, CLAUDE.md setup, and a post-optimization audit so you see the before/after. Restart Claude Code after it finishes.
 
+### Updating
+
+```bash
+cd claude-token-optimizer
+./update.sh
+```
+
+Pulls the latest changes and re-runs the installer. All steps are idempotent, so existing setups are updated in place without duplicating anything. The update shows which commits were pulled and a full before/after audit.
+
 ### Running steps individually
 
 If you prefer to run steps separately or only apply specific optimizations:
@@ -193,6 +202,7 @@ The principle is the same everywhere: **keep the always-loaded footprint small, 
 ```
 claude-token-optimizer/
   install.sh              One-command setup (runs everything below)
+  update.sh               Pull latest + re-run install
   audit.py                Audit script -- scan system prompt token usage
   migrate.sh              Move skills to vault, install skill-router, update CLAUDE.md
   restore.sh              Move skills back, remove skill-router, clean up CLAUDE.md
