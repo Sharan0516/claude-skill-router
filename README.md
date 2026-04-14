@@ -40,21 +40,20 @@ Start with the audit to see where your tokens are going. Then apply whichever op
 ```bash
 git clone https://github.com/sharan0516/claude-token-optimizer.git
 cd claude-token-optimizer
-
-# 1. See where your tokens are going
-python3 audit.py
-
-# 2. Optimize skills (moves to vault, installs router)
-./migrate.sh
-
-# 3. Optimize memory (compacts MEMORY.md indexes)
-./memory-router.sh
-
-# 4. See the improvement
-python3 audit.py
+./install.sh
 ```
 
-Restart Claude Code after running the optimizers. Changes take effect on the next session.
+One command. It runs the full pipeline: baseline audit, skill router migration, memory compaction, CLAUDE.md setup, and a post-optimization audit so you see the before/after. Restart Claude Code after it finishes.
+
+### Running steps individually
+
+If you prefer to run steps separately or only apply specific optimizations:
+
+```bash
+python3 audit.py          # audit only (no changes)
+./migrate.sh              # skill router only
+./memory-router.sh        # memory compaction only
+```
 
 ## Audit
 
@@ -193,9 +192,10 @@ The principle is the same everywhere: **keep the always-loaded footprint small, 
 
 ```
 claude-token-optimizer/
+  install.sh              One-command setup (runs everything below)
   audit.py                Audit script -- scan system prompt token usage
-  migrate.sh              Move skills to vault, install skill-router
-  restore.sh              Move skills back, remove skill-router
+  migrate.sh              Move skills to vault, install skill-router, update CLAUDE.md
+  restore.sh              Move skills back, remove skill-router, clean up CLAUDE.md
   add-skill.sh            Add a single skill to the vault
   memory-router.sh        Compact MEMORY.md files
   memory-restore.sh       Restore MEMORY.md files from backups
