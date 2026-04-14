@@ -80,6 +80,28 @@ else
   fi
 fi
 
+# ── Remove skill-router instruction from CLAUDE.md ──────────────────────────
+
+header "Cleaning up CLAUDE.md..."
+
+CLAUDE_MD="${HOME}/.claude/CLAUDE.md"
+ROUTER_MARKER="## Skill Router -- MANDATORY on Every Turn"
+
+if [[ -f "${CLAUDE_MD}" ]] && grep -qF "${ROUTER_MARKER}" "${CLAUDE_MD}"; then
+  tmp_file="$(mktemp)"
+  awk '
+    /^## Skill Router -- MANDATORY on Every Turn/ { skip=1; next }
+    skip && /^#/ { skip=0 }
+    skip { next }
+    # Remove blank line left before next section
+    !skip { print }
+  ' "${CLAUDE_MD}" | sed '/^$/N;/^\n$/d' > "${tmp_file}"
+  mv "${tmp_file}" "${CLAUDE_MD}"
+  ok "Removed skill-router instruction from CLAUDE.md"
+else
+  info "No skill-router instruction in CLAUDE.md"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 header "Done."

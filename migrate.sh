@@ -208,6 +208,54 @@ catalog_table="| Skill | Triggers | Vault Path |
 
 ok "Router installed: ${ROUTER_SKILL_DIR}/SKILL.md"
 
+# ── Inject skill-router instruction into CLAUDE.md ───────────────────────────
+
+header "Checking CLAUDE.md for skill-router instruction..."
+
+CLAUDE_MD="${HOME}/.claude/CLAUDE.md"
+ROUTER_MARKER="## Skill Router -- MANDATORY on Every Turn"
+
+ROUTER_INSTRUCTION='## Skill Router -- MANDATORY on Every Turn
+
+Before responding to any user request, scan the skill-router catalog at
+~/.claude/skills/skill-router/SKILL.md for trigger matches. If a match is found:
+1. Read the full SKILL.md from the matched vault path
+2. Execute the skill IN THIS CONTEXT (never delegate skill execution to a
+   sub-agent -- skills need access to memory, context store, and conversation)
+3. Only fall back to general behavior if no skill matches
+
+This applies even when the request seems simple or when you think you already
+know how to handle it. The skill contains domain logic that general knowledge
+does not.'
+
+if [[ -f "${CLAUDE_MD}" ]]; then
+  if grep -qF "${ROUTER_MARKER}" "${CLAUDE_MD}"; then
+    info "CLAUDE.md already has skill-router instruction"
+  else
+    # Find a good insertion point: before "# Global Instructions" or append
+    if grep -q "^# Global Instructions" "${CLAUDE_MD}"; then
+      tmp_file="$(mktemp)"
+      awk -v instruction="${ROUTER_INSTRUCTION}" '
+        /^# Global Instructions/ { print instruction; print ""; }
+        { print }
+      ' "${CLAUDE_MD}" > "${tmp_file}"
+      mv "${tmp_file}" "${CLAUDE_MD}"
+      ok "Added skill-router instruction to CLAUDE.md (before Global Instructions)"
+    else
+      # Append to end
+      {
+        echo ""
+        echo "${ROUTER_INSTRUCTION}"
+      } >> "${CLAUDE_MD}"
+      ok "Added skill-router instruction to CLAUDE.md (appended)"
+    fi
+  fi
+else
+  # Create CLAUDE.md with the instruction
+  echo "${ROUTER_INSTRUCTION}" > "${CLAUDE_MD}"
+  ok "Created CLAUDE.md with skill-router instruction"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 header "Done."

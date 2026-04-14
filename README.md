@@ -85,6 +85,17 @@ Claude Code loads a description of every skill in `~/.claude/skills/` into the s
 ./add-skill.sh ~/.claude/skills/my-new-skill   # add a new skill to the vault
 ```
 
+### CLAUDE.md instruction (auto-injected)
+
+The migrate script automatically adds a mandatory instruction to your `~/.claude/CLAUDE.md` that tells Claude to check the skill-router catalog on every turn. Without this, Claude may recognize skill triggers sometimes but miss them other times, requiring extra prompting to find and load the right skill.
+
+The injected instruction:
+- Forces Claude to scan the catalog before responding to any request
+- Ensures skills execute in the main conversation context (not delegated to a sub-agent that lacks memory/context)
+- Is idempotent -- running migrate again won't duplicate the instruction
+
+If you already have a `CLAUDE.md`, the instruction is inserted before the `# Global Instructions` section (or appended if that section doesn't exist). If you don't have one, it creates it.
+
 ### How the router works
 
 1. **You talk** -- Claude reads your message normally
